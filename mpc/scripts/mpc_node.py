@@ -71,6 +71,13 @@ class MPC(Node):
         super().__init__('mpc_node')
         # TODO: create ROS subscribers and publishers
         #       use the MPC as a tracker (similar to pure pursuit)
+        
+        # publishers
+        self.drive_pub_ = self.create_publisher(AckermannDriveStamped, '/drive', 1) 
+
+        # subscribers
+        self.pose_sub_ = self.create_subscriber(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1) 
+     
         # TODO: get waypoints here
         self.waypoints = None
 
@@ -96,18 +103,22 @@ class MPC(Node):
 
         # TODO: solve the MPC control problem
         (
-            self.oa,
-            self.odelta_v,
-            ox,
-            oy,
-            oyaw,
-            ov,
-            state_predict,
+            self.oa, # acceleration
+            self.odelta_v, # steering angle
+            ox, # state x
+            oy, # state y
+            oyaw, # yaw
+            ov, # speed
+            state_predict, # the predicted path for x steps
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta_v)
 
         # TODO: publish drive message.
-        steer_output = self.odelta_v[0]
-        speed_output = vehicle_state.v + self.oa[0] * self.config.DTK
+        drive_msg = AckermannDriveStamped()
+        drive_msg.drive.steering_angle = self.odelta_v[0]
+        drive_msg.drive.speed = vehicle_state.v + self.oa[0] * self.config.DTK
+        self.drive_pub_.publish(drive_msg)
+        
+        
 
     def mpc_prob_init(self):
         """
@@ -151,14 +162,14 @@ class MPC(Node):
         # The FTOCP has the horizon of T timesteps
 
         # --------------------------------------------------------
-        # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somehwhere
+        # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somewhere
 
         # TODO: Objective part 1: Influence of the control inputs: Inputs u multiplied by the penalty R
-
+        objective += cvxpy.quad_form(R_block, self.uk) 
         # TODO: Objective part 2: Deviation of the vehicle from the reference trajectory weighted by Q, including final Timestep T weighted by Qf
-
+        objective += cvxpy.quad_form(Q_block, (self.ref_traj_k - self.xk))
         # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
-
+        objective += cvxpy.quad_form(Rd_block, (self.uk[:, 1:] - self.uk[:, :-1]))
         # --------------------------------------------------------
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
@@ -214,22 +225,33 @@ class MPC(Node):
         #       Add dynamics constraints to the optimization problem
         #       This constraint should be based on a few variables:
         #       self.xk, self.Ak_, self.Bk_, self.uk, and self.Ck_
-        
+        constraints += [self.xk == self.Ak_ @ self.xk + self.Bk_ @ self.uk + self.Ck_]
         # TODO: Constraint part 2:
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
-
+        constraints += [
+            self.uk[1, :] <= self.config.MAX_STEER, # max steering
+            self.uk[1, :] >= -self.config.MAX_STEER, # max steering
+            (self.uk[1, :] - self.uk[1, 1:])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
+        ]
         # TODO: Constraint part 3:
         #       Add constraints on upper and lower bounds of states and inputs
         #       and initial state constraint, should be based on:
         #       self.xk, self.x0k, self.config.MAX_SPEED, self.config.MIN_SPEED,
         #       self.uk, self.config.MAX_ACCEL, self.config.MAX_STEER
-        
+        constraints += [
+            self.xk[2, :] <= self.config.MAX_SPEED, # max speed
+            self.xk[2, :] >= self.config.MIN_SPEED, # min speed
+            self.xk[:, 0] == self.x0k, # initial state
+            self.uk[0, :] <= self.config.MAX_ACCEL, # max acceleration
+            self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
+        ]
         # -------------------------------------------------------------
 
         # Create the optimization problem in CVXPY and setup the workspace
         # Optimization goal: minimize the objective function
+        
         self.MPC_prob = cvxpy.Problem(cvxpy.Minimize(objective), constraints)
 
     def calc_ref_trajectory(self, state, cx, cy, cyaw, sp):
@@ -318,7 +340,7 @@ class MPC(Node):
     def get_model_matrix(self, v, phi, delta):
         """
         Calc linear and discrete time dynamic model-> Explicit discrete time-invariant
-        Linear System: Xdot = Ax +Bu + C
+        Linear System: Xdot = Ax + Bu + C
         State vector: x=[x, y, v, yaw]
         :param v: speed
         :param phi: heading angle of the vehicle
