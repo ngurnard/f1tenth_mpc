@@ -77,13 +77,14 @@ class MPC(Node):
         self.drive_pub_ = self.create_publisher(AckermannDriveStamped, '/drive', 1) 
 
         # subscribers
-        self.pose_sub_ = self.create_subscriber(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
+        self.pose_sub_ = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
 
-        print("HERE LOL")
+        print("HERE LOL 69")
      
         # TODO: get waypoints here
-        self.declare_parameter("waypoints_path", "/home/rithwik/UPenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv")
+        self.declare_parameter("waypoints_path", "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv")
         self.waypoints_path = self.get_parameter("waypoints_path").get_parameter_value().string_value
+        print(self.waypoints_path)
         self.waypoints = self.get_waypoints(self.waypoints_path)
 
         self.config = mpc_config()
@@ -180,6 +181,13 @@ class MPC(Node):
         Q_block.append(self.config.Qfk)
         Q_block = block_diag(tuple(Q_block))
 
+        print("R_block: ", R_block.shape)
+        print("uk: ", self.uk.shape)
+        print("Rd_block: ", Rd_block.shape)
+        print("xk: ", self.uk.shape)
+        print("Q_block: ", Q_block.shape)
+        print("ref_traj_k: ", self.ref_traj_k.shape)
+
         # Formulate and create the finite-horizon optimal control problem (objective function)
         # The FTOCP has the horizon of T timesteps
 
@@ -187,11 +195,11 @@ class MPC(Node):
         # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somewhere
 
         # TODO: Objective part 1: Influence of the control inputs: Inputs u multiplied by the penalty R
-        objective += cvxpy.quad_form(R_block, self.uk) 
+        objective += cvxpy.quad_form(self.uk, R_block) 
         # TODO: Objective part 2: Deviation of the vehicle from the reference trajectory weighted by Q, including final Timestep T weighted by Qf
-        objective += cvxpy.quad_form(Q_block, (self.ref_traj_k - self.xk))
+        objective += cvxpy.quad_form((self.ref_traj_k - self.xk), Q_block)
         # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
-        objective += cvxpy.quad_form(Rd_block, (self.uk[:, 1:] - self.uk[:, :-1]))
+        objective += cvxpy.quad_form((self.uk[:, 1:] - self.uk[:, :-1]), Rd_block)
         # --------------------------------------------------------
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
@@ -463,14 +471,17 @@ class MPC(Node):
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
-    def get_waypoints(path):
+    def get_waypoints(self, path):
         # Get the waypoints from the path
-        waypoints = []
-        with open(path, 'r') as reader:
-            line = reader.read()
+        waypoints = np.empty((1,4))
+        f = open(path, 'r')
+        while(True):
+            line = f.readline()
+            if(not line):
+                break
             x, y, yaw, v = line.split(',')
-            waypoints.append([float(x), float(y),float(yaw), float(v)])
-        print(len(waypoints))
+            waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(yaw), float(v)]).reshape(1,4)))
+        waypoints = waypoints[1:]
         return waypoints
 
 def main(args=None):
@@ -481,3 +492,6 @@ def main(args=None):
 
     mpc_node.destroy_node()
     rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
