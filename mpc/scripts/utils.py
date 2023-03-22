@@ -1,4 +1,6 @@
-    # MIT License
+#!/usr/bin/env python3
+
+# MIT License
 
 # Copyright (c) Hongrui Zheng, Johannes Betz
 

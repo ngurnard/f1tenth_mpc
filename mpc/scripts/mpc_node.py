@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import math
 from dataclasses import dataclass, field
-
 import cvxpy
 import numpy as np
 import rclpy
@@ -10,8 +9,10 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
+from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import LaserScan
-from utils import nearest_point
+import utils
+from numpy import linalg as LA
 
 # TODO CHECK: include needed ROS msg type headers and libraries
 
@@ -76,10 +77,14 @@ class MPC(Node):
         self.drive_pub_ = self.create_publisher(AckermannDriveStamped, '/drive', 1) 
 
         # subscribers
-        self.pose_sub_ = self.create_subscriber(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1) 
+        self.pose_sub_ = self.create_subscriber(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
+
+        print("HERE LOL")
      
         # TODO: get waypoints here
-        self.waypoints = None
+        self.declare_parameter("waypoints_path", "/home/rithwik/UPenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv")
+        self.waypoints_path = self.get_parameter("waypoints_path").get_parameter_value().string_value
+        self.waypoints = self.get_waypoints(self.waypoints_path)
 
         self.config = mpc_config()
         self.odelta_v = None
@@ -91,13 +96,32 @@ class MPC(Node):
         self.mpc_prob_init()
 
     def pose_callback(self, pose_msg):
-        pass
+
         # TODO: extract pose from ROS msg
-        vehicle_state = None
+        xp = pose_msg.pose.position.x
+        yp = pose_msg.pose.position.y
+
+        print("x: ", xp, "y: ", yp)
+        # Quaternion to Euler 
+        q = [pose_msg.pose.orientation.x, pose_msg.pose.orientation.y, pose_msg.pose.orientation.z, pose_msg.pose.orientation.w]
+        # num = 2 * (q[0] * q[1] + q[2] * q[3]) 
+        # den = 1 - 2 * (q[1] * q[1] + q[2] * q[2])
+        # yawp = atan2(num, den)
+
+        quat = Rotation.from_quat(q)
+        euler = Rotation.as_euler("zxy", degrees=False)
+        yawp, rollp, pitchp = euler[0], euler[1], euler[2]
+
+        # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
+        # vp = LA.norm(lin_speed, 2)
+        vp = 1.0
+        vehicle_state = State(x=xp, y=yp, yaw=yawp, v=vp)
 
         # TODO: Calculate the next reference trajectory for the next T steps
         #       with current vehicle pose.
         #       ref_x, ref_y, ref_yaw, ref_v are columns of self.waypoints
+        
+        ref_x, ref_y, ref_yaw, ref_v = self.waypoints[0], self.waypoints[1], self.waypoints[2], self.waypoints[3]
         ref_path = self.calc_ref_trajectory(self, vehicle_state, ref_x, ref_y, ref_yaw, ref_v)
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
@@ -117,8 +141,6 @@ class MPC(Node):
         drive_msg.drive.steering_angle = self.odelta_v[0]
         drive_msg.drive.speed = vehicle_state.v + self.oa[0] * self.config.DTK
         self.drive_pub_.publish(drive_msg)
-        
-        
 
     def mpc_prob_init(self):
         """
@@ -231,8 +253,6 @@ class MPC(Node):
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
         constraints += [
-            self.uk[1, :] <= self.config.MAX_STEER, # max steering
-            self.uk[1, :] >= -self.config.MAX_STEER, # max steering
             (self.uk[1, :] - self.uk[1, 1:])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
         ]
         # TODO: Constraint part 3:
@@ -246,6 +266,8 @@ class MPC(Node):
             self.xk[:, 0] == self.x0k, # initial state
             self.uk[0, :] <= self.config.MAX_ACCEL, # max acceleration
             self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
+            self.uk[1, :] <= self.config.MAX_STEER, # max steering
+            self.uk[1, :] >= -self.config.MAX_STEER, # max steering
         ]
         # -------------------------------------------------------------
 
@@ -272,7 +294,7 @@ class MPC(Node):
         ncourse = len(cx)
 
         # Find nearest index/setpoint from where the trajectories are calculated
-        _, _, _, ind = nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
+        _, _, _, ind = utils.nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
 
         # Load the initial parameters from the setpoint into the trajectory
         ref_traj[0, 0] = cx[ind]
@@ -440,6 +462,16 @@ class MPC(Node):
         )
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
+    
+    def get_waypoints(path):
+        # Get the waypoints from the path
+        waypoints = []
+        with open(path, 'r') as reader:
+            line = reader.read()
+            x, y, yaw, v = line.split(',')
+            waypoints.append([float(x), float(y),float(yaw), float(v)])
+        print(len(waypoints))
+        return waypoints
 
 def main(args=None):
     rclpy.init(args=args)
