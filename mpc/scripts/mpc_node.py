@@ -111,7 +111,7 @@ class MPC(Node):
         # yawp = atan2(num, den)
 
         quat = Rotation.from_quat(q)
-        euler = Rotation.as_euler("zxy", degrees=False)
+        euler = quat.as_euler("zxy", degrees=False)
         yawp, rollp, pitchp = euler[0], euler[1], euler[2]
 
         # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
