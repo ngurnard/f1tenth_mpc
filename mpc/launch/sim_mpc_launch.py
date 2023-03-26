@@ -14,7 +14,7 @@ def generate_launch_description():
             name='mpc_node',
             parameters=[
                 {
-                'waypoints_path' : "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv"
+                'waypoints_path' : "/home/nicholas/Documents/upenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv"
                 }
             ],
         ),
