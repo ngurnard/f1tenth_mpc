@@ -20,7 +20,7 @@ from numpy import linalg as LA
 @dataclass
 class mpc_config:
     NXK: int = 4  # length of kinematic state vector: z = [x, y, v, yaw]
-    NU: int = 2  # length of input vector: u = = [steering speed, acceleration]
+    NU: int = 2  # length of input vector: u = [steering speed, acceleration]
     TK: int = 8  # finite time horizon length kinematic
 
     # ---------------------------------------------------
@@ -82,7 +82,8 @@ class MPC(Node):
         print("HERE LOL 69")
      
         # TODO: get waypoints here
-        self.declare_parameter("waypoints_path", "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv")
+        # self.declare_parameter("waypoints_path", "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv")
+        self.declare_parameter("waypoints_path", "/home/manasa/sim_ws/src/mpc/waypoints/waypoints_mpc.csv")
         self.waypoints_path = self.get_parameter("waypoints_path").get_parameter_value().string_value
         print(self.waypoints_path)
         self.waypoints = self.get_waypoints(self.waypoints_path)
@@ -97,7 +98,7 @@ class MPC(Node):
         self.mpc_prob_init()
 
     def pose_callback(self, pose_msg):
-
+        print("i am in pose callback")
         # TODO: extract pose from ROS msg
         xp = pose_msg.pose.position.x
         yp = pose_msg.pose.position.y
@@ -181,12 +182,14 @@ class MPC(Node):
         Q_block.append(self.config.Qfk)
         Q_block = block_diag(tuple(Q_block))
 
-        print("R_block: ", R_block.shape)
-        print("uk: ", self.uk.shape)
-        print("Rd_block: ", Rd_block.shape)
-        print("xk: ", self.uk.shape)
-        print("Q_block: ", Q_block.shape)
-        print("ref_traj_k: ", self.ref_traj_k.shape)
+        print("R_block: ", R_block.shape)   #(16, 16)
+        print("uk: ", self.uk.shape)        #(2, 8)
+        print("Rd_block: ", Rd_block.shape) #(14, 14)
+        print("xk: ", self.xk.shape)        #(4, 9)
+        print("Q_block: ", Q_block.shape)   #(36, 36)
+        print("ref_traj_k: ", self.ref_traj_k.shape) #(4, 9)
+     
+   
 
         # Formulate and create the finite-horizon optimal control problem (objective function)
         # The FTOCP has the horizon of T timesteps
@@ -195,11 +198,11 @@ class MPC(Node):
         # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somewhere
 
         # TODO: Objective part 1: Influence of the control inputs: Inputs u multiplied by the penalty R
-        objective += cvxpy.quad_form(self.uk, R_block) 
+        objective += cvxpy.quad_form(self.uk.flatten(), R_block) 
         # TODO: Objective part 2: Deviation of the vehicle from the reference trajectory weighted by Q, including final Timestep T weighted by Qf
-        objective += cvxpy.quad_form((self.ref_traj_k - self.xk), Q_block)
+        objective += cvxpy.quad_form((self.ref_traj_k.flatten() - self.xk.flatten()), Q_block)
         # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
-        objective += cvxpy.quad_form((self.uk[:, 1:] - self.uk[:, :-1]), Rd_block)
+        objective += cvxpy.quad_form((self.uk[:, 1:] - self.uk[:, :-1]).flatten(), Rd_block)
         # --------------------------------------------------------
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
@@ -255,13 +258,19 @@ class MPC(Node):
         #       Add dynamics constraints to the optimization problem
         #       This constraint should be based on a few variables:
         #       self.xk, self.Ak_, self.Bk_, self.uk, and self.Ck_
-        constraints += [self.xk == self.Ak_ @ self.xk + self.Bk_ @ self.uk + self.Ck_]
+        print("Ak_block: ", self.Ak_.shape) # (32, 32)
+        print("xk: ", self.xk.shape)        # (4, 9)
+        print("Bk_block: ", self.Bk_.shape) # (32, 16)
+        print("uk: ", self.uk.shape)        # (2, 8)
+        print("Ck_block: ", self.Ck_.shape) # (32, )
+  
+        constraints += [self.xk[:, 1:].flatten() == self.Ak_ @ self.xk[:, 1:].flatten() + self.Bk_ @ self.uk.flatten() + self.Ck_]
         # TODO: Constraint part 2:
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
         constraints += [
-            (self.uk[1, :] - self.uk[1, 1:])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
+            (self.uk[1, 1:]- self.uk[1, :-1])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
         ]
         # TODO: Constraint part 3:
         #       Add constraints on upper and lower bounds of states and inputs
@@ -284,6 +293,7 @@ class MPC(Node):
         
         self.MPC_prob = cvxpy.Problem(cvxpy.Minimize(objective), constraints)
 
+
     def calc_ref_trajectory(self, state, cx, cy, cyaw, sp):
         """
         calc referent trajectory ref_traj in T steps: [x, y, v, yaw]
@@ -297,6 +307,8 @@ class MPC(Node):
         :return: reference trajectory ref_traj, reference steering angle
         """
 
+
+        print("Entering calc_ref_traj")
         # Create placeholder Arrays for the reference trajectory for T steps
         ref_traj = np.zeros((self.config.NXK, self.config.TK + 1))
         ncourse = len(cx)
@@ -327,6 +339,8 @@ class MPC(Node):
             cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
+
+        print("Exiting calc_ref_traj")
 
         return ref_traj
 
@@ -364,6 +378,8 @@ class MPC(Node):
             state.v = self.config.MAX_SPEED
         elif state.v < self.config.MIN_SPEED:
             state.v = self.config.MIN_SPEED
+
+        print("exiting update state")
 
         return state
 
@@ -445,6 +461,7 @@ class MPC(Node):
             print("Error: Cannot solve mpc..")
             oa, odelta, ox, oy, oyaw, ov = None, None, None, None, None, None
 
+        print("exiting mpc_prob_solve")
         return oa, odelta, ox, oy, oyaw, ov
 
     def linear_mpc_control(self, ref_path, x0, oa, od):
@@ -456,6 +473,7 @@ class MPC(Node):
         :param od: delta of T steps of last time
         """
 
+        print("Entering linear_mpc_control")
         if oa is None or od is None:
             oa = [0.0] * self.config.TK
             od = [0.0] * self.config.TK
@@ -468,6 +486,9 @@ class MPC(Node):
         mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(
             ref_path, path_predict, x0
         )
+
+
+        print("Exiting linear_mpc_control")
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
