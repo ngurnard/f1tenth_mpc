@@ -12,8 +12,15 @@ def generate_launch_description():
             package='mpc',
             executable='mpc_node.py',
             name='mpc_node',
-            remappings=[
-                ("/ego_racecar/odom", "/pf/viz/inferred_pose")
+            parameters=[
+                {
+                'waypoints_path' : "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv"
+                }
             ],
         ),
+        Node(
+            package='pure_pursuit',
+            executable='pose_fake_pub_node',
+            name='pose_fake_pub_node',
+        )
     ])
