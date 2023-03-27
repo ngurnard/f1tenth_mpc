@@ -46,8 +46,8 @@ def nearest_point(point, trajectory):
         t (float): nearest point's location as a segment between 0 and 1 on the vector formed by the closest two points on the trajectory. (p_i---*-------p_i+1)
         i (int): index of nearest point in the array of trajectory waypoints
     """
-    diffs = trajectory[1:,:] - trajectory[:-1,:]
-    l2s   = diffs[:,0]**2 + diffs[:,1]**2
+    diffs = trajectory[1:,:] - trajectory[:-1,:] # 
+    l2s   = diffs[:,0]**2 + diffs[:,1]**2 # l2-norm squared
     dots = np.empty((trajectory.shape[0]-1, ))
     for i in range(dots.shape[0]):
         dots[i] = np.dot((point - trajectory[i, :]), diffs[i, :])

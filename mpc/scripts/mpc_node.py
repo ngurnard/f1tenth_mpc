@@ -27,10 +27,10 @@ class mpc_config:
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: list = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.01, 1.0])
     )  # input cost matrix, penalty for inputs - [accel, steering_speed]
     Rdk: list = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.01, 1.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
     Qk: list = field(
         default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
@@ -76,8 +76,8 @@ class MPC(Node):
         
         # publishers
         self.drive_pub_ = self.create_publisher(AckermannDriveStamped, '/drive', 1) 
-        self.ref_path_vis_pub_ = self.create_publisher(Marker, "/visualization_marker", 1)
-        self.pred_path_vis_pub_ = self.create_publisher(Marker, "/visualization_marker", 1)
+        self.ref_path_vis_pub_ = self.create_publisher(Marker, "/ref_path_vis", 1)
+        self.pred_path_vis_pub_ = self.create_publisher(Marker, "/pred_path_vis", 1)
         self.waypoints_vis_pub_ = self.create_publisher(MarkerArray, "/waypoints", 1)
 
         # subscribers
@@ -118,7 +118,7 @@ class MPC(Node):
 
         quat = Rotation.from_quat(q)
         euler = quat.as_euler("zxy", degrees=False)
-        yawp, rollp, pitchp = euler[0], euler[1], euler[2]
+        yawp = euler[0] + np.pi
 
         # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
         # vp = LA.norm(lin_speed, 2)
@@ -130,8 +130,8 @@ class MPC(Node):
         #       ref_x, ref_y, ref_yaw, ref_v are columns of self.waypoints
         ref_x, ref_y, ref_yaw, ref_v = self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2], self.waypoints[:, 3]
         ref_path = self.calc_ref_trajectory(vehicle_state, ref_x, ref_y, ref_yaw, ref_v)
-        print("ref_path: ", ref_path)
-        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
+        # print("ref_path: ", ref_path)
+        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.yaw, vehicle_state.v]
 
         # TODO: solve the MPC control problem
         (
@@ -150,13 +150,27 @@ class MPC(Node):
         print("oy: ", oy)
         print("oyaw: ", oyaw)
         print("ov: ", ov)
-        print("state_predict: ", state_predict)
+        # print("state_predict: ", state_predict)
+        mpc_path_vis = Marker()
+        mpc_path_vis.header.frame_id = "map"
+        mpc_path_vis.color.a = 1.0
+        mpc_path_vis.color.r = 0.0
+        mpc_path_vis.color.g = 1.0
+        mpc_path_vis.color.b = 0.0
+        mpc_path_vis.type = Marker.LINE_STRIP
+        mpc_path_vis.scale.x = 0.1
+        mpc_path_vis.id = 1000
+
+        for i in range(len(ox)):
+            mpc_path_vis.points.append(Point(x=ox[i], y=oy[i], z=0.0))
 
         # TODO: publish drive message.
+  
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = self.odelta_v[0]
         drive_msg.drive.speed = vehicle_state.v + self.oa[0] * self.config.DTK
         self.drive_pub_.publish(drive_msg)
+        self.pred_path_vis_pub_.publish(mpc_path_vis)
 
     def mpc_prob_init(self):
         """
@@ -202,8 +216,6 @@ class MPC(Node):
         # print("xk: ", self.xk.shape)        #(4, 9)
         # print("Q_block: ", Q_block.shape)   #(36, 36)
         # print("ref_traj_k: ", self.ref_traj_k.shape) #(4, 9)
-     
-   
 
         # Formulate and create the finite-horizon optimal control problem (objective function)
         # The FTOCP has the horizon of T timesteps
@@ -212,11 +224,13 @@ class MPC(Node):
         # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somewhere
 
         # TODO: Objective part 1: Influence of the control inputs: Inputs u multiplied by the penalty R
-        objective += cvxpy.quad_form(self.uk.flatten(), R_block) 
+        objective += cvxpy.quad_form(cvxpy.reshape(self.uk, (16, 1), order='F'), R_block) 
         # TODO: Objective part 2: Deviation of the vehicle from the reference trajectory weighted by Q, including final Timestep T weighted by Qf
-        objective += cvxpy.quad_form((self.ref_traj_k.flatten() - self.xk.flatten()), Q_block)
+        objective += cvxpy.quad_form((cvxpy.reshape(self.ref_traj_k, (36, 1), order='F') - cvxpy.reshape(self.xk, (36, 1), order='F')), Q_block)
         # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
-        objective += cvxpy.quad_form((self.uk[:, 1:] - self.uk[:, :-1]).flatten(), Rd_block)
+        objective += cvxpy.quad_form(cvxpy.reshape((self.uk[:, 1:] - self.uk[:, :-1]), (14, 1), order='F'), Rd_block)
+
+
         # --------------------------------------------------------
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
@@ -278,27 +292,30 @@ class MPC(Node):
         # print("uk: ", self.uk.shape)        # (2, 8)
         # print("Ck_block: ", self.Ck_.shape) # (32, )
   
-        constraints += [self.xk[:, 1:].flatten() == self.Ak_ @ self.xk[:, 1:].flatten() + self.Bk_ @ self.uk.flatten() + self.Ck_]
+        constraints += [cvxpy.reshape(self.xk[:, 1:], (32, 1), order='F') == self.Ak_ @ cvxpy.reshape(self.xk[:, 1:], (32, 1), order='F') +
+                         self.Bk_ @ cvxpy.reshape(self.uk, (16, 1), order='F') + cvxpy.reshape(self.Ck_, (32, 1))]
         # TODO: Constraint part 2:
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
-        constraints += [
-            (self.uk[1, 1:]- self.uk[1, :-1])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
-        ]
+        # constraints += [
+        #     (self.uk[1, 1:]- self.uk[1, :-1])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
+        # ]
+        
         # TODO: Constraint part 3:
         #       Add constraints on upper and lower bounds of states and inputs
         #       and initial state constraint, should be based on:
         #       self.xk, self.x0k, self.config.MAX_SPEED, self.config.MIN_SPEED,
         #       self.uk, self.config.MAX_ACCEL, self.config.MAX_STEER
         constraints += [
-            self.xk[2, :] <= self.config.MAX_SPEED, # max speed
-            self.xk[2, :] >= self.config.MIN_SPEED, # min speed
+            self.xk[3, :] <= self.config.MAX_SPEED, # max speed
+            self.xk[3, :] >= self.config.MIN_SPEED, # min speed
             self.xk[:, 0] == self.x0k, # initial state
             self.uk[0, :] <= self.config.MAX_ACCEL, # max acceleration
-            self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
+            # self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
+            self.uk[0, :] >= 0, # min acceleration
             self.uk[1, :] <= self.config.MAX_STEER, # max steering
-            self.uk[1, :] >= -self.config.MAX_STEER, # max steering
+            self.uk[1, :] >= self.config.MIN_STEER, # max steering
         ]
         # -------------------------------------------------------------
 
@@ -321,13 +338,13 @@ class MPC(Node):
         :return: reference trajectory ref_traj, reference steering angle
         """
 
-
-        print("Entering calc_ref_traj")
         # Create placeholder Arrays for the reference trajectory for T steps
-        ref_traj = np.zeros((self.config.NXK, self.config.TK + 1))
+        ref_traj = np.zeros((self.config.NXK, self.config.TK + 1)) # (4x9)
         ncourse = len(cx)
 
         # Find nearest index/setpoint from where the trajectories are calculated
+        # TODO: Check if there is a bug here since it may be finding the nearest point backwards
+        # is time taken into consideration?
         _, _, _, ind = utils.nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
 
         # Load the initial parameters from the setpoint into the trajectory
@@ -355,7 +372,6 @@ class MPC(Node):
         ref_traj[3, :] = cyaw[ind_list]
         
         self.visualize_ref_traj(ref_traj)
-        print("Exiting calc_ref_traj")
 
         return ref_traj
 
@@ -371,11 +387,11 @@ class MPC(Node):
         ref_strip = Marker()
         ref_strip.header.frame_id = "map"
         ref_strip.ns = "ref_traj"
-        ref_strip.id = 0
+        ref_strip.id = 10
         ref_strip.type = Marker.LINE_STRIP
         ref_strip.action = Marker.ADD
-        ref_strip.scale.x = 0.5
-        ref_strip.color.a = 1.0
+        ref_strip.scale.x = 0.2
+        ref_strip.color.a = 0.4
         ref_strip.color.r = 1.0
         ref_strip.color.g = 0.0
         ref_strip.color.b = 1.0
@@ -391,7 +407,7 @@ class MPC(Node):
             ref_strip.points.append(p)
 
         self.ref_path_vis_pub_.publish(ref_strip)
-        self.waypoints_vis_pub_.publish(self.waypoints_vis)
+        # self.waypoints_vis_pub_.publish(self.waypoints_vis)
 
 
 
@@ -522,7 +538,7 @@ class MPC(Node):
         :param od: delta of T steps of last time
         """
 
-        print("Entering linear_mpc_control")
+        # print("Entering linear_mpc_control")
         if oa is None or od is None:
             oa = [0.0] * self.config.TK
             od = [0.0] * self.config.TK
@@ -554,6 +570,7 @@ class MPC(Node):
             if(not line):
                 break
             x, y, yaw, v = line.split(',')
+            v = 1.0
             waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(yaw), float(v)]).reshape(1,4)))
 
             wpt = Marker()
@@ -563,7 +580,7 @@ class MPC(Node):
             wpt.scale.x = 0.15
             wpt.scale.y = 0.15
             wpt.scale.z = 0.15
-            wpt.color.a = 1.0
+            wpt.color.a = 0.01
             wpt.color.r = 0.0
             wpt.color.g = 0.0
             wpt.color.b = 1.0
