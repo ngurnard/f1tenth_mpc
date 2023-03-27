@@ -128,10 +128,10 @@ class MPC(Node):
         # TODO: Calculate the next reference trajectory for the next T steps
         #       with current vehicle pose.
         #       ref_x, ref_y, ref_yaw, ref_v are columns of self.waypoints
-        ref_x, ref_y, ref_yaw, ref_v = self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2], self.waypoints[:, 3]
-        ref_path = self.calc_ref_trajectory(vehicle_state, ref_x, ref_y, ref_yaw, ref_v)
+        ref_x, ref_y, ref_v, ref_yaw = self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2], self.waypoints[:, 3]
+        ref_path = self.calc_ref_trajectory(vehicle_state, ref_x, ref_y, ref_v, ref_yaw)
         # print("ref_path: ", ref_path)
-        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.yaw, vehicle_state.v]
+        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
         # TODO: solve the MPC control problem
         (
@@ -139,8 +139,8 @@ class MPC(Node):
             self.odelta_v, # steering angle
             ox, # state x
             oy, # state y
-            oyaw, # yaw
             ov, # speed
+            oyaw, # yaw
             state_predict, # the predicted path for x steps
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta_v)
 
@@ -298,6 +298,7 @@ class MPC(Node):
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
+        
         # constraints += [
         #     (self.uk[1, 1:]- self.uk[1, :-1])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
         # ]
@@ -308,8 +309,8 @@ class MPC(Node):
         #       self.xk, self.x0k, self.config.MAX_SPEED, self.config.MIN_SPEED,
         #       self.uk, self.config.MAX_ACCEL, self.config.MAX_STEER
         constraints += [
-            self.xk[3, :] <= self.config.MAX_SPEED, # max speed
-            self.xk[3, :] >= self.config.MIN_SPEED, # min speed
+            self.xk[2, :] <= self.config.MAX_SPEED, # max speed
+            self.xk[2, :] >= self.config.MIN_SPEED, # min speed
             self.xk[:, 0] == self.x0k, # initial state
             self.uk[0, :] <= self.config.MAX_ACCEL, # max acceleration
             # self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
@@ -325,7 +326,7 @@ class MPC(Node):
         self.MPC_prob = cvxpy.Problem(cvxpy.Minimize(objective), constraints)
 
 
-    def calc_ref_trajectory(self, state, cx, cy, cyaw, sp):
+    def calc_ref_trajectory(self, state, cx, cy, sp, cyaw):
         """
         calc referent trajectory ref_traj in T steps: [x, y, v, yaw]
         using the current velocity, calc the T points along the reference path
@@ -416,7 +417,7 @@ class MPC(Node):
         for i, _ in enumerate(x0):
             path_predict[i, 0] = x0[i] 
 
-        state = State(x=x0[0], y=x0[1], yaw=x0[3], v=x0[2])
+        state = State(x=x0[0], y=x0[1], v=x0[2], yaw=x0[3])
         for (ai, di, i) in zip(oa, od, range(1, self.config.TK + 1)):
             state = self.update_state(state, ai, di)
             path_predict[0, i] = state.x
@@ -525,9 +526,9 @@ class MPC(Node):
 
         else:
             print("Error: Cannot solve mpc..")
-            oa, odelta, ox, oy, oyaw, ov = None, None, None, None, None, None
+            oa, odelta, ox, oy, ov, oyaw = None, None, None, None, None, None
 
-        return oa, odelta, ox, oy, oyaw, ov
+        return oa, odelta, ox, oy, ov, oyaw
 
     def linear_mpc_control(self, ref_path, x0, oa, od):
         """
@@ -548,11 +549,11 @@ class MPC(Node):
         poa, pod = oa[:], od[:]
 
         # Run the MPC optimization: Create and solve the optimization problem
-        mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(
+        mpc_a, mpc_delta, mpc_x, mpc_y,  mpc_v, mpc_yaw,= self.mpc_prob_solve(
             ref_path, path_predict, x0
         )
 
-        return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
+        return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_v, mpc_yaw, path_predict
     
     def get_waypoints(self, path):
         # Get the waypoints from the path
@@ -571,7 +572,7 @@ class MPC(Node):
                 break
             x, y, yaw, v = line.split(',')
             v = 1.0
-            waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(yaw), float(v)]).reshape(1,4)))
+            waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(v),float(yaw)]).reshape(1,4)))
 
             wpt = Marker()
             wpt.id = marker_id 
