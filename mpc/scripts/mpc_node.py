@@ -5,7 +5,7 @@ import cvxpy
 import numpy as np
 import rclpy
 from ackermann_msgs.msg import AckermannDrive, AckermannDriveStamped
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from rclpy.node import Node
 from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
@@ -13,6 +13,7 @@ from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import LaserScan
 import utils
 from numpy import linalg as LA
+from visualization_msgs.msg import Marker, MarkerArray
 
 # TODO CHECK: include needed ROS msg type headers and libraries
 
@@ -75,17 +76,23 @@ class MPC(Node):
         
         # publishers
         self.drive_pub_ = self.create_publisher(AckermannDriveStamped, '/drive', 1) 
+        self.ref_path_vis_pub_ = self.create_publisher(Marker, "/visualization_marker", 1)
+        self.pred_path_vis_pub_ = self.create_publisher(Marker, "/visualization_marker", 1)
+        self.waypoints_vis_pub_ = self.create_publisher(MarkerArray, "/waypoints", 1)
 
         # subscribers
         self.pose_sub_ = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
 
-        print("HERE LOL 69")
+        # # visualization vars
+        # self.marker_id = 1
      
         # TODO: get waypoints here
         # self.declare_parameter("waypoints_path", "/sim_ws/src/mpc/mpc/waypoints/waypoints_mpc.csv")
-        self.declare_parameter("waypoints_path", "/home/manasa/sim_ws/src/mpc/waypoints/waypoints_mpc.csv")
+        # self.declare_parameter("waypoints_path", "/home/manasa/sim_ws/src/mpc/waypoints/waypoints_mpc.csv")
+        self.declare_parameter("waypoints_path", "/home/nicholas/Documents/upenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv")
         self.waypoints_path = self.get_parameter("waypoints_path").get_parameter_value().string_value
-        print(self.waypoints_path)
+        print("waypoints path:", self.waypoints_path)
+        self.waypoints_vis = MarkerArray()
         self.waypoints = self.get_waypoints(self.waypoints_path)
 
         self.config = mpc_config()
@@ -98,12 +105,11 @@ class MPC(Node):
         self.mpc_prob_init()
 
     def pose_callback(self, pose_msg):
-        print("i am in pose callback")
+
         # TODO: extract pose from ROS msg
         xp = pose_msg.pose.position.x
         yp = pose_msg.pose.position.y
 
-        print("x: ", xp, "y: ", yp)
         # Quaternion to Euler 
         q = [pose_msg.pose.orientation.x, pose_msg.pose.orientation.y, pose_msg.pose.orientation.z, pose_msg.pose.orientation.w]
         # num = 2 * (q[0] * q[1] + q[2] * q[3]) 
@@ -117,14 +123,14 @@ class MPC(Node):
         # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
         # vp = LA.norm(lin_speed, 2)
         vp = 1.0
-        vehicle_state = State(x=xp, y=yp, yaw=yawp, v=vp)
+        vehicle_state = State(x=xp, y=yp, v=vp, yaw=yawp)
 
         # TODO: Calculate the next reference trajectory for the next T steps
         #       with current vehicle pose.
         #       ref_x, ref_y, ref_yaw, ref_v are columns of self.waypoints
-        
-        ref_x, ref_y, ref_yaw, ref_v = self.waypoints[0], self.waypoints[1], self.waypoints[2], self.waypoints[3]
-        ref_path = self.calc_ref_trajectory(self, vehicle_state, ref_x, ref_y, ref_yaw, ref_v)
+        ref_x, ref_y, ref_yaw, ref_v = self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2], self.waypoints[:, 3]
+        ref_path = self.calc_ref_trajectory(vehicle_state, ref_x, ref_y, ref_yaw, ref_v)
+        print("ref_path: ", ref_path)
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
         # TODO: solve the MPC control problem
@@ -137,6 +143,14 @@ class MPC(Node):
             ov, # speed
             state_predict, # the predicted path for x steps
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta_v)
+
+        print("self.oa: ", self.oa)
+        print("self.odelta_v: ", self.odelta_v)
+        print("self.ox: ", ox)
+        print("oy: ", oy)
+        print("oyaw: ", oyaw)
+        print("ov: ", ov)
+        print("state_predict: ", state_predict)
 
         # TODO: publish drive message.
         drive_msg = AckermannDriveStamped()
@@ -182,12 +196,12 @@ class MPC(Node):
         Q_block.append(self.config.Qfk)
         Q_block = block_diag(tuple(Q_block))
 
-        print("R_block: ", R_block.shape)   #(16, 16)
-        print("uk: ", self.uk.shape)        #(2, 8)
-        print("Rd_block: ", Rd_block.shape) #(14, 14)
-        print("xk: ", self.xk.shape)        #(4, 9)
-        print("Q_block: ", Q_block.shape)   #(36, 36)
-        print("ref_traj_k: ", self.ref_traj_k.shape) #(4, 9)
+        # print("R_block: ", R_block.shape)   #(16, 16)
+        # print("uk: ", self.uk.shape)        #(2, 8)
+        # print("Rd_block: ", Rd_block.shape) #(14, 14)
+        # print("xk: ", self.xk.shape)        #(4, 9)
+        # print("Q_block: ", Q_block.shape)   #(36, 36)
+        # print("ref_traj_k: ", self.ref_traj_k.shape) #(4, 9)
      
    
 
@@ -258,11 +272,11 @@ class MPC(Node):
         #       Add dynamics constraints to the optimization problem
         #       This constraint should be based on a few variables:
         #       self.xk, self.Ak_, self.Bk_, self.uk, and self.Ck_
-        print("Ak_block: ", self.Ak_.shape) # (32, 32)
-        print("xk: ", self.xk.shape)        # (4, 9)
-        print("Bk_block: ", self.Bk_.shape) # (32, 16)
-        print("uk: ", self.uk.shape)        # (2, 8)
-        print("Ck_block: ", self.Ck_.shape) # (32, )
+        # print("Ak_block: ", self.Ak_.shape) # (32, 32)
+        # print("xk: ", self.xk.shape)        # (4, 9)
+        # print("Bk_block: ", self.Bk_.shape) # (32, 16)
+        # print("uk: ", self.uk.shape)        # (2, 8)
+        # print("Ck_block: ", self.Ck_.shape) # (32, )
   
         constraints += [self.xk[:, 1:].flatten() == self.Ak_ @ self.xk[:, 1:].flatten() + self.Bk_ @ self.uk.flatten() + self.Ck_]
         # TODO: Constraint part 2:
@@ -339,15 +353,52 @@ class MPC(Node):
             cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
-
+        
+        self.visualize_ref_traj(ref_traj)
         print("Exiting calc_ref_traj")
 
         return ref_traj
 
+    def visualize_ref_traj(self, ref_traj):
+        """
+        A method used simply to visualze the computed reference trajectory
+        for the mpc control problem.
+
+        Inputs:
+            ref_traj: reference trajectory ref_traj, reference steering angle
+                      [x, y, v, yaw]
+        """
+        ref_strip = Marker()
+        ref_strip.header.frame_id = "map"
+        ref_strip.ns = "ref_traj"
+        ref_strip.id = 0
+        ref_strip.type = Marker.LINE_STRIP
+        ref_strip.action = Marker.ADD
+        ref_strip.scale.x = 0.5
+        ref_strip.color.a = 1.0
+        ref_strip.color.r = 1.0
+        ref_strip.color.g = 0.0
+        ref_strip.color.b = 1.0
+
+
+        # make a list of points from the ref_traj
+        ref_strip.points.clear()
+        for i in range(ref_traj.shape[1]):
+            # p = Point(ref_traj[0, i], ref_traj[1, i])
+            p = Point()
+            p.x = ref_traj[0, i]
+            p.y = ref_traj[1, i]
+            ref_strip.points.append(p)
+
+        self.ref_path_vis_pub_.publish(ref_strip)
+        self.waypoints_vis_pub_.publish(self.waypoints_vis)
+
+
+
     def predict_motion(self, x0, oa, od, xref):
         path_predict = xref * 0.0
         for i, _ in enumerate(x0):
-            path_predict[i, 0] = x0[i]
+            path_predict[i, 0] = x0[i] 
 
         state = State(x=x0[0], y=x0[1], yaw=x0[3], v=x0[2])
         for (ai, di, i) in zip(oa, od, range(1, self.config.TK + 1)):
@@ -379,8 +430,7 @@ class MPC(Node):
         elif state.v < self.config.MIN_SPEED:
             state.v = self.config.MIN_SPEED
 
-        print("exiting update state")
-
+   
         return state
 
     def get_model_matrix(self, v, phi, delta):
@@ -406,7 +456,7 @@ class MPC(Node):
         A[1, 3] = self.config.DTK * v * math.cos(phi)
         A[3, 2] = self.config.DTK * math.tan(delta) / self.config.WB
 
-        # Input Matrix B; 4x2
+        # Input Matrix B: 4x2
         B = np.zeros((self.config.NXK, self.config.NU))
         B[2, 0] = self.config.DTK
         B[3, 1] = self.config.DTK * v / (self.config.WB * math.cos(delta) ** 2)
@@ -461,7 +511,6 @@ class MPC(Node):
             print("Error: Cannot solve mpc..")
             oa, odelta, ox, oy, oyaw, ov = None, None, None, None, None, None
 
-        print("exiting mpc_prob_solve")
         return oa, odelta, ox, oy, oyaw, ov
 
     def linear_mpc_control(self, ref_path, x0, oa, od):
@@ -487,22 +536,52 @@ class MPC(Node):
             ref_path, path_predict, x0
         )
 
-
-        print("Exiting linear_mpc_control")
-
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
     def get_waypoints(self, path):
         # Get the waypoints from the path
         waypoints = np.empty((1,4))
         f = open(path, 'r')
+        # waypoints_viz = MarkerArray()
+        # waypoints_viz = Marker()
+        marker_id = 1
+        
+        # self.wpt.action = self.wpt.ADD
+
         while(True):
+
             line = f.readline()
             if(not line):
                 break
             x, y, yaw, v = line.split(',')
             waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(yaw), float(v)]).reshape(1,4)))
+
+            wpt = Marker()
+            wpt.id = marker_id 
+            wpt.type = Marker.SPHERE
+            wpt.ns = "waypoints"
+            wpt.scale.x = 0.15
+            wpt.scale.y = 0.15
+            wpt.scale.z = 0.15
+            wpt.color.a = 1.0
+            wpt.color.r = 0.0
+            wpt.color.g = 0.0
+            wpt.color.b = 1.0
+            wpt.header.frame_id = "map"
+            wpt.pose.position.x = float(x)
+            wpt.pose.position.y = float(y)
+            
+
+            self.waypoints_vis.markers.append(wpt)
+            # self.wpt.points.append(p)
+
+            marker_id += 1
+
+
         waypoints = waypoints[1:]
+        self.waypoints_vis_pub_.publish(self.waypoints_vis)
+        # self.waypoints_vis_pub_.publish(self.wpt)
+
         return waypoints
 
 def main(args=None):

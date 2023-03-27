@@ -17,6 +17,7 @@ def generate_launch_description():
                 'waypoints_path' : "/home/nicholas/Documents/upenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv"
                 }
             ],
+            output='screen', # this is to see print statements
         ),
         Node(
             package='pure_pursuit',
