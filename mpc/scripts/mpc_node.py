@@ -27,16 +27,17 @@ class mpc_config:
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: list = field(
-        default_factory=lambda: np.diag([0.01, 1.0])
+        default_factory=lambda: np.diag([0.01, 50.0])
     )  # input cost matrix, penalty for inputs - [accel, steering_speed]
     Rdk: list = field(
-        default_factory=lambda: np.diag([0.01, 1.0])
+        default_factory=lambda: np.diag([0.01, 50.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
     Qk: list = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
+        # default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
+        default_factory=lambda: np.diag([30.0, 30.0, 5.5, 13.0])
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, delta, v, yaw, yaw-rate, beta]
     Qfk: list = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
+        default_factory=lambda: np.diag([30.0, 30.0, 5.5, 13.0])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, delta, v, yaw, yaw-rate, beta]
     # ---------------------------------------------------
 
@@ -118,7 +119,8 @@ class MPC(Node):
 
         quat = Rotation.from_quat(q)
         euler = quat.as_euler("zxy", degrees=False)
-        yawp = euler[0] + np.pi
+        # yawp = euler[0] + np.pi
+        yawp = euler[0]
 
         # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
         # vp = LA.norm(lin_speed, 2)
@@ -141,36 +143,24 @@ class MPC(Node):
             oy, # state y
             ov, # speed
             oyaw, # yaw
-            state_predict, # the predicted path for x steps
+            state_predict, # the predicted path for x steps (how is this useful?)
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta_v)
 
-        print("self.oa: ", self.oa)
+        # print("self.oa: ", self.oa)
         print("self.odelta_v: ", self.odelta_v)
-        print("self.ox: ", ox)
-        print("oy: ", oy)
+        # print("self.ox: ", ox)
+        # print("oy: ", oy)
         print("oyaw: ", oyaw)
-        print("ov: ", ov)
+        # print("ov: ", ov)
         # print("state_predict: ", state_predict)
-        mpc_path_vis = Marker()
-        mpc_path_vis.header.frame_id = "map"
-        mpc_path_vis.color.a = 1.0
-        mpc_path_vis.color.r = 0.0
-        mpc_path_vis.color.g = 1.0
-        mpc_path_vis.color.b = 0.0
-        mpc_path_vis.type = Marker.LINE_STRIP
-        mpc_path_vis.scale.x = 0.1
-        mpc_path_vis.id = 1000
 
-        for i in range(len(ox)):
-            mpc_path_vis.points.append(Point(x=ox[i], y=oy[i], z=0.0))
+        self.visualize_mpc_path(ox, oy)
 
         # TODO: publish drive message.
-  
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = self.odelta_v[0]
         drive_msg.drive.speed = vehicle_state.v + self.oa[0] * self.config.DTK
         self.drive_pub_.publish(drive_msg)
-        self.pred_path_vis_pub_.publish(mpc_path_vis)
 
     def mpc_prob_init(self):
         """
@@ -230,9 +220,7 @@ class MPC(Node):
         # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
         objective += cvxpy.quad_form(cvxpy.reshape((self.uk[:, 1:] - self.uk[:, :-1]), (14, 1), order='F'), Rd_block)
 
-
         # --------------------------------------------------------
-
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
         # Evaluate vehicle Dynamics for next T timesteps
         A_block = []
@@ -291,14 +279,13 @@ class MPC(Node):
         # print("Bk_block: ", self.Bk_.shape) # (32, 16)
         # print("uk: ", self.uk.shape)        # (2, 8)
         # print("Ck_block: ", self.Ck_.shape) # (32, )
-  
-        constraints += [cvxpy.reshape(self.xk[:, 1:], (32, 1), order='F') == self.Ak_ @ cvxpy.reshape(self.xk[:, 1:], (32, 1), order='F') +
+        constraints += [cvxpy.reshape(self.xk[:, 1:], (32, 1), order='F') == self.Ak_ @ cvxpy.reshape(self.xk[:, :-1], (32, 1), order='F') +
                          self.Bk_ @ cvxpy.reshape(self.uk, (16, 1), order='F') + cvxpy.reshape(self.Ck_, (32, 1))]
+        
         # TODO: Constraint part 2:
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
-        
         # constraints += [
         #     (self.uk[1, 1:]- self.uk[1, :-1])/self.config.DTK <= self.config.MAX_DSTEER, # max steering speed
         # ]
@@ -313,8 +300,8 @@ class MPC(Node):
             self.xk[2, :] >= self.config.MIN_SPEED, # min speed
             self.xk[:, 0] == self.x0k, # initial state
             self.uk[0, :] <= self.config.MAX_ACCEL, # max acceleration
-            # self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
-            self.uk[0, :] >= 0, # min acceleration
+            self.uk[0, :] >= -self.config.MAX_ACCEL, # min acceleration
+            # self.uk[0, :] >= 0, # min acceleration
             self.uk[1, :] <= self.config.MAX_STEER, # max steering
             self.uk[1, :] >= self.config.MIN_STEER, # max steering
         ]
@@ -409,6 +396,31 @@ class MPC(Node):
 
         self.ref_path_vis_pub_.publish(ref_strip)
         # self.waypoints_vis_pub_.publish(self.waypoints_vis)
+
+    def visualize_mpc_path(self, ox, oy):
+        """
+        A method used simply to visualze the the predicted trajectory 
+        for the mpc control problem output.
+
+        Inputs:
+            ox: the computed x positions from the mpc problem
+            oy: the computed y positions from the mpc problem
+        """
+
+        mpc_path_vis = Marker()
+        mpc_path_vis.header.frame_id = "map"
+        mpc_path_vis.color.a = 1.0
+        mpc_path_vis.color.r = 0.0
+        mpc_path_vis.color.g = 1.0
+        mpc_path_vis.color.b = 0.0
+        mpc_path_vis.type = Marker.LINE_STRIP
+        mpc_path_vis.scale.x = 0.1
+        mpc_path_vis.id = 1000
+
+        for i in range(len(ox)):
+            mpc_path_vis.points.append(Point(x=ox[i], y=oy[i], z=0.0))
+
+        self.pred_path_vis_pub_.publish(mpc_path_vis)
 
 
 
@@ -571,7 +583,7 @@ class MPC(Node):
             if(not line):
                 break
             x, y, yaw, v = line.split(',')
-            v = 1.0
+            # v = 1.0
             waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(v),float(yaw)]).reshape(1,4)))
 
             wpt = Marker()
