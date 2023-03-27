@@ -7,6 +7,9 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    share_directory = os.path.join(
+        get_package_share_directory('mpc'),
+        'waypoints', "")
     return LaunchDescription([
         Node(
             package='mpc',
@@ -14,7 +17,7 @@ def generate_launch_description():
             name='mpc_node',
             parameters=[
                 {
-                'waypoints_path' : "/home/nicholas/Documents/upenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/waypoints_mpc.csv"
+                'waypoints_path' : share_directory + "waypoints_sim.csv"
                 }
             ],
             output='screen', # this is to see print statements
