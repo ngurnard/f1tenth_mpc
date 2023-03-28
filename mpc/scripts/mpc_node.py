@@ -27,17 +27,17 @@ class mpc_config:
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: list = field(
-        default_factory=lambda: np.diag([0.01, 50.0])
+        default_factory=lambda: np.diag([0.01, 35.0])
     )  # input cost matrix, penalty for inputs - [accel, steering_speed]
     Rdk: list = field(
-        default_factory=lambda: np.diag([0.01, 50.0])
+        default_factory=lambda: np.diag([0.01, 75.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
     Qk: list = field(
         # default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
-        default_factory=lambda: np.diag([30.0, 30.0, 5.5, 13.0])
+        default_factory=lambda: np.diag([100.0, 100.0, 5.5, 7.5])
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, delta, v, yaw, yaw-rate, beta]
     Qfk: list = field(
-        default_factory=lambda: np.diag([30.0, 30.0, 5.5, 13.0])
+        default_factory=lambda: np.diag([100.0, 100.0, 5.5, 7.5])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, delta, v, yaw, yaw-rate, beta]
     # ---------------------------------------------------
 
@@ -119,8 +119,8 @@ class MPC(Node):
 
         quat = Rotation.from_quat(q)
         euler = quat.as_euler("zxy", degrees=False)
-        # yawp = euler[0] + np.pi
-        yawp = euler[0]
+        # yawp = euler[0]
+        yawp = euler[0] + 2*math.pi # handle angle wrap around
 
         # lin_speed = [pose_msg.twist.twist.x, pose_msg.twist.twist.y, pose_msg.twist.twist.z]
         # vp = LA.norm(lin_speed, 2)
@@ -158,8 +158,10 @@ class MPC(Node):
 
         # TODO: publish drive message.
         drive_msg = AckermannDriveStamped()
+        # handle the angle wrap around
         drive_msg.drive.steering_angle = self.odelta_v[0]
         drive_msg.drive.speed = vehicle_state.v + self.oa[0] * self.config.DTK
+        # drive_msg.drive.speed = 0.0
         self.drive_pub_.publish(drive_msg)
 
     def mpc_prob_init(self):
@@ -351,11 +353,12 @@ class MPC(Node):
         ref_traj[0, :] = cx[ind_list]
         ref_traj[1, :] = cy[ind_list]
         ref_traj[2, :] = sp[ind_list]
-        cyaw[cyaw - state.yaw > 4.5] = np.abs(
-            cyaw[cyaw - state.yaw > 4.5] - (2 * np.pi)
+        # changed 4.5 in all of the following to pi
+        cyaw[cyaw - state.yaw > math.pi] = np.abs(
+            cyaw[cyaw - state.yaw > math.pi] - (2 * np.pi)
         )
-        cyaw[cyaw - state.yaw < -4.5] = np.abs(
-            cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
+        cyaw[cyaw - state.yaw < -math.pi] = np.abs(
+            cyaw[cyaw - state.yaw < -math.pi] + (2 * np.pi)
         )
         ref_traj[3, :] = cyaw[ind_list]
         
@@ -583,7 +586,7 @@ class MPC(Node):
             if(not line):
                 break
             x, y, yaw, v = line.split(',')
-            # v = 1.0
+            # v = 8.0
             waypoints = np.vstack((waypoints, np.array([float(x), float(y),float(v),float(yaw)]).reshape(1,4)))
 
             wpt = Marker()
