@@ -8,8 +8,9 @@ x = []
 y = []
 yaw = []
 speed = []
-path = "/home/rithwik/UPenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/"
-with open(path+'waypoints_sim.csv', 'r') as csvfile:
+# path = "/home/rithwik/UPenn/ESE615/sim_ws/src/lab-7-model-predictive-control-hot-wheels/mpc/waypoints/"
+path = "/home/manasa/ese615_labs/lab-5-slam-and-pure-pursuit-hot-wheels/pure_pursuit/waypoints/"
+with open(path+'waypoints_mu0p5_dense_new.csv', 'r') as csvfile:
     reader = csv.reader(csvfile, delimiter=',')
 
     for row in reader:
@@ -27,8 +28,8 @@ yaw_spline = InterpolatedUnivariateSpline(axes, yaw)
 speed_spline = InterpolatedUnivariateSpline(axes, speed)
 
 # Sample the interpolated waypoints
-number_of_samples = 100
-axes_sampled = np.linspace(1, len(x), number_of_samples*len(x))
+number_of_samples = 200
+axes_sampled = np.linspace(1, len(x), number_of_samples)
 
 x_sampled = x_spline(axes_sampled)
 y_sampled = y_spline(axes_sampled)
@@ -36,13 +37,14 @@ yaw_sampled = yaw_spline(axes_sampled)
 speed_sampled = speed_spline(axes_sampled)
 
 # Save the interpolated waypoints
-with open(path+'waypoints_sim_interpolated_100.csv', 'w') as csvfile:
+with open(path+'waypoints_mu0p5_dense_200.csv', 'w') as csvfile:
     writer = csv.writer(csvfile, delimiter=',')
 
     for i in range(len(x_sampled)):
         writer.writerow([x_sampled[i], y_sampled[i], yaw_sampled[i], speed_sampled[i]])
 
 # Plot the interpolated waypoints
+plt.plot(x_sampled, y_sampled, 'rx')
 plt.plot(x_sampled, y_sampled, 'r')
 plt.plot(x, y, 'b')
 plt.show()
